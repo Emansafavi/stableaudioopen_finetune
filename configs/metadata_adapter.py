@@ -1,62 +1,47 @@
-# ./configs/metadata_adapter.py
 import os, csv
 from pathlib import Path
 from typing import Dict
 
-# Cache: {stem -> {"prompt": "...", "negative_prompt": "..."}}
-_META: Dict[str, Dict[str, str]] = {}
-_LOADED = False
+_CACHE = {}  # cache per-CSV-path: {stem: {"prompt": str}}
 
-def _load():
-    global _LOADED
-    if _LOADED:
+def _load(csv_path: str):
+    p = Path(csv_path).expanduser().resolve()
+    if p in _CACHE:
         return
-    csv_path = Path(os.environ.get(
-        "SA_METADATA_CSV",
-        "./data/dataset/output_dataset/metadata.csv"
-    )).expanduser()
-    if csv_path.exists():
-        with csv_path.open("r", newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            cols = {c.lower(): c for c in reader.fieldnames or []}
-            for r in reader:
-                stem = Path(r.get("filepath","")).stem
-                if not stem:
-                    continue
-                # Accept either 'prompt' or 'text' (fall back to filename)
-                prompt = r.get(cols.get("prompt") or "prompt") \
-                      or r.get(cols.get("text") or "text") \
-                      or stem.replace("_"," ").replace("-"," ")
-                neg = r.get(cols.get("negative_prompt") or "negative_prompt") or ""
-                _META[stem] = {"prompt": prompt, "negative_prompt": neg}
-    _LOADED = True
+    mapping: Dict[str, Dict[str,str]] = {}
+    if p.exists():
+        with p.open("r", newline="", encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                stem = Path(r["filepath"]).stem
+                mapping[stem] = {"prompt": r.get("prompt","")}
+    _CACHE[p] = mapping
 
-def _meta_for(sample_path) -> Dict[str, str]:
-    _load()
-    stem = Path(str(sample_path)).stem
-    return _META.get(stem, {"prompt": "", "negative_prompt": ""})
+def _meta_for(sample_path, csv_path: str):
+    p = Path(str(sample_path))
+    cp = Path(csv_path).expanduser().resolve()
+    _load(str(cp))
+    return _CACHE.get(cp, {}).get(p.stem, {"prompt": ""})
 
-# -------- PATH-style entry points (must return a string) --------
-def get_audio_path(sample_path, *_, **__) -> str: return str(sample_path)
-def get_path(sample_path, *_, **__) -> str:       return str(sample_path)
-def resolve_path(sample_path, *_, **__) -> str:    return str(sample_path)
+def _default_csv_for(sample_path):
+    p = Path(str(sample_path)).resolve()
+    split_root = p.parent.parent if p.parent.name == "audio" else p.parent
+    guess = split_root / "metadata.csv"
+    env = os.environ.get("SA_METADATA_CSV")
+    return env or str(guess)
 
-# -------- DOCS-style / METADATA-style (must return a dict) --------
-# Official docs: get_custom_metadata(info, audio) -> dict
+# PATH-style (must return a string)
+def get_audio_path(sample_path, *_, **__): return str(sample_path)
+def get_path(sample_path, *_, **__):       return str(sample_path)
+def resolve_path(sample_path, *_, **__):    return str(sample_path)
+
+# METADATA-style (must return a dict)
 def get_custom_metadata(info, audio=None):
-    # prefer path fields if present; fall back to audio or info itself
-    path = (
-        (isinstance(info, dict) and (info.get("path") or info.get("relpath") or info.get("filepath")))
-        or audio
-        or info
-    )
-    return _meta_for(path)
+    path = (isinstance(info, dict) and (info.get("path") or info.get("relpath") or info.get("filepath"))) or audio or info
+    csv_path = _default_csv_for(path)
+    return _meta_for(path, csv_path)
 
-# Some branches call this name instead
 def get_metadata(*args, **kwargs):
-    try:
-        return get_custom_metadata(*args, **kwargs)
-    except TypeError:
-        # If only a bare path is passed
-        return _meta_for(args[0] if args else "")
-
+    try: return get_custom_metadata(*args, **kwargs)
+    except TypeError: 
+        target = args[0] if args else ""
+        return _meta_for(target, _default_csv_for(target))
