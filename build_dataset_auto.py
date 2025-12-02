@@ -12,32 +12,25 @@ TARGET_SR = 44100
 TARGET_BITS = 16
 TARGET_CH = 2
 NORMALIZE_DB = -1
-SECONDS_PER_CLIP = 4.0  # DCASE Task 7 clips are 4 s
+SECONDS_PER_CLIP = 4.0
 
-# Augmentations: (suffix, sox_effects...)
+# Light augmentation set (keine extremen Veränderungen)
 AUGMENTATIONS: List[Tuple[str, List[str]]] = [
-    ("reverb", ["reverb", "50"]),          # spacious tail
-    ("pitchup", ["pitch", "100"]),         # +100 cents
-    ("pitchdown", ["pitch", "-100"]),      # -100 cents
-    ("tempo95", ["tempo", "-m", "0.95"]),  # -5% tempo
-    ("tempo105", ["tempo", "-m", "1.05"]), # +5% tempo
-    ("lowpass4k", ["lowpass", "4000"]),    # darker tone
-    ("highpass200", ["highpass", "200"]),  # thinner tone
+    ("pitchup", ["pitch", "50"]),          # +50 cents
+    ("pitchdown", ["pitch", "-50"]),       # -50 cents
+    ("tempo98", ["tempo", "-m", "0.98"]),  # -2%
+    ("tempo102", ["tempo", "-m", "1.02"]), # +2%
 ]
 
-# Caption postfixes for augmented files (optional, nice for clarity)
 CAPTION_TAGS = {
-    "reverb": "(with room reverb)",
     "pitchup": "(slightly higher pitch)",
     "pitchdown": "(slightly lower pitch)",
-    "tempo95": "(slightly slower tempo)",
-    "tempo105": "(slightly faster tempo)",
-    "lowpass4k": "(darker tone)",
-    "highpass200": "(thinner tone)",
+    "tempo98": "(slightly slower)",
+    "tempo102": "(slightly faster)",
 }
 
-# Safety cap to avoid exploding data
-MAX_VARIANTS_PER_FILE = 8
+# Default: **2 variants per file** (light augmentation)
+MAX_VARIANTS_PER_FILE = 2
 
 # ----------------------------------------------------------------------
 
@@ -50,7 +43,6 @@ def ensure_dir(p: Path):
     p.mkdir(parents=True, exist_ok=True)
 
 def sox_convert(in_path: Path, out_path: Path, logf):
-    """Convert to 44.1kHz, stereo, 16-bit and normalize peaks to -1 dBFS."""
     cmd = [
         "sox", str(in_path),
         "-r", str(TARGET_SR),
@@ -61,8 +53,7 @@ def sox_convert(in_path: Path, out_path: Path, logf):
     ]
     run(cmd, logf)
 
-def sox_augment(in_path: Path, out_path: Path, effect: List[str], logf):
-    """Apply augmentation + normalize to -1 dBFS."""
+def sox_augment(in_path: Path, out_path: Path, effect, logf):
     cmd = ["sox", str(in_path), str(out_path)] + effect + ["gain", "-n", str(NORMALIZE_DB)]
     run(cmd, logf)
 
@@ -70,19 +61,19 @@ def minutes_from_count(n_files: int, seconds_per_clip: float = SECONDS_PER_CLIP)
     return (n_files * seconds_per_clip) / 60.0
 
 def main():
-    ap = argparse.ArgumentParser(description="Auto-extend DCASE clips to target minutes for Stable Audio Open fine-tuning.")
-    ap.add_argument("--raw_dir", type=Path, required=True, help="Folder with original WAVs (e.g., dev_001.wav)")
-    ap.add_argument("--caption_csv", type=Path, required=True, help="CSV with columns: file,caption")
-    ap.add_argument("--out_root", type=Path, required=True, help="Output root folder")
-    ap.add_argument("--target_minutes", type=float, default=120.0, help="Approximate target duration in minutes")
-    ap.add_argument("--max_variants_per_file", type=int, default=MAX_VARIANTS_PER_FILE, help="Hard cap of variants per source file")
+    ap = argparse.ArgumentParser(description="Light augmentation for Stable Audio finetuning.")
+    ap.add_argument("--raw_dir", type=Path, required=True)
+    ap.add_argument("--caption_csv", type=Path, required=True)
+    ap.add_argument("--out_root", type=Path, required=True)
+    ap.add_argument("--target_minutes", type=float, default=120.0)
+    ap.add_argument("--max_variants_per_file", type=int, default=MAX_VARIANTS_PER_FILE)
     args = ap.parse_args()
 
-    raw_dir: Path = args.raw_dir
-    caption_csv: Path = args.caption_csv
-    out_root: Path = args.out_root
-    target_minutes: float = args.target_minutes
-    max_variants: int = args.max_variants_per_file
+    raw_dir = args.raw_dir
+    caption_csv = args.caption_csv
+    out_root = args.out_root
+    target_minutes = args.target_minutes
+    max_variants = args.max_variants_per_file
 
     audio_out = out_root / "audio"
     logs_out = out_root / "logs"
@@ -90,76 +81,63 @@ def main():
     ensure_dir(logs_out)
 
     with open(logs_out / "sox_commands.txt", "w") as logf:
-        # Load captions
+
         rows = []
-        with open(caption_csv, "r", newline="", encoding="utf-8") as f:
+        with open(caption_csv, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
-            assert "file" in reader.fieldnames and "caption" in reader.fieldnames, \
-                "caption_csv must have columns: file, caption"
             for r in reader:
                 rows.append({"file": r["file"], "caption": r["caption"]})
 
-        # Match raw wavs with CSV entries
-        src_to_caption = {r["file"]: r["caption"] for r in rows}
         raw_wavs = {p.name: p for p in raw_dir.glob("*.wav")}
-        existing = [raw_wavs[name] for name in src_to_caption.keys() if name in raw_wavs]
-
-        if not existing:
-            raise FileNotFoundError(f"No matching .wav files in {raw_dir} for entries in {caption_csv}")
+        existing = [raw_wavs[x["file"]] for x in rows if x["file"] in raw_wavs]
 
         # Convert originals
         final_rows = []
         for p in existing:
-            base_name = p.stem  # dev_001
-            out_name = f"{base_name}_44k16.wav"
-            out_path = audio_out / out_name
-            sox_convert(p, out_path, logf)
-            final_rows.append({"file": out_name, "caption": src_to_caption[p.name]})
+            base = p.stem
+            name = f"{base}_44k16.wav"
+            outp = audio_out / name
+            sox_convert(p, outp, logf)
+            src_caption = next(r["caption"] for r in rows if r["file"] == p.name)
+            final_rows.append({"file": name, "caption": src_caption})
 
-        # Compute how many minutes we have vs target
         base_minutes = minutes_from_count(len(final_rows))
         need_minutes = max(0.0, target_minutes - base_minutes)
 
-        # Compute per-file variants needed (uniform)
         if need_minutes > 0:
-            files_needed = math.ceil((need_minutes * 60.0) / SECONDS_PER_CLIP)
-            per_file_variants = math.ceil(files_needed / len(final_rows))
-            per_file_variants = min(per_file_variants, max_variants)
+            files_needed = math.ceil((need_minutes * 60) / SECONDS_PER_CLIP)
+            per_file_variants = min(math.ceil(files_needed / len(final_rows)), max_variants)
         else:
             per_file_variants = 0
 
-        print(f"Target: {target_minutes:.2f} min | Base: {base_minutes:.2f} min")
-        print(f"Generating {per_file_variants} variants per file (cap {max_variants})...")
+        print(f"Target: {target_minutes:.2f} | Base: {base_minutes:.2f}")
+        print(f"Generating {per_file_variants} variants per file…")
 
-        # Augment
-        for row in list(final_rows):  # iterate over the originals
-            src_name = row["file"]
-            src_caption = row["caption"]
-            src_path = audio_out / src_name
+        # Apply light augmentations
+        for row in list(final_rows):
+            src = audio_out / row["file"]
+            cap = row["caption"]
 
             for i in range(per_file_variants):
                 suffix, effect = AUGMENTATIONS[i % len(AUGMENTATIONS)]
-                out_name = f"{Path(src_name).stem}_{suffix}.wav"
-                out_path = audio_out / out_name
-                sox_augment(src_path, out_path, effect, logf)
+                outname = f"{Path(row['file']).stem}_{suffix}.wav"
+                outp = audio_out / outname
+                sox_augment(src, outp, effect, logf)
 
-                cap_tag = CAPTION_TAGS.get(suffix, f"(aug: {suffix})")
-                aug_caption = f"{src_caption} {cap_tag}"
-                final_rows.append({"file": out_name, "caption": aug_caption})
+                final_rows.append({
+                    "file": outname,
+                    "caption": f"{cap} {CAPTION_TAGS[suffix]}"
+                })
 
-        # Write final metadata
-        out_csv = out_root / "metadata.csv"
-        with open(out_csv, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=["file", "caption"])
-            writer.writeheader()
-            for r in final_rows:
-                writer.writerow(r)
+        # Write metadata
+        with open(out_root / "metadata.csv", "w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["file", "caption"])
+            w.writeheader()
+            w.writerows(final_rows)
 
-        total_minutes = minutes_from_count(len(final_rows))
-        print(f"Total clips: {len(final_rows)} | {total_minutes:.2f} min ({total_minutes/60:.2f} h)")
+        print(f"Total clips: {len(final_rows)}")
         print(f"Output audio: {audio_out}")
-        print(f"Output CSV:   {out_csv}")
-        print(f"SoX log:      {logs_out / 'sox_commands.txt'}")
+        print(f"Output CSV:   {out_root / 'metadata.csv'}")
 
 if __name__ == "__main__":
     main()

@@ -1,139 +1,156 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[setup] Starting Stable Audio finetune dataset setup…"
+echo "============================================"
+echo "[setup] Stable Audio fine-tuning preparation"
+echo "============================================"
 
-# -----------------------------
-# Paths
-# -----------------------------
 ROOT_DIR="$(pwd)"
-RAW_DIR="${ROOT_DIR}/data/raw/DCASE"
-DEV_AUDIO="${RAW_DIR}/dev/audio"
-EVAL_AUDIO="${RAW_DIR}/eval/audio"
+RAW_DIR="${ROOT_DIR}/data/raw"
+CLOTHO_DIR="${RAW_DIR}/clotho_v2"
+AUDIO_DIR="${CLOTHO_DIR}/audio/development"
+CAPTIONS_CSV="${CLOTHO_DIR}/captions.csv"
 
 OUT_DIR="${ROOT_DIR}/data/dataset"
-AUG_DIR="${OUT_DIR}/augmented"
 TRAIN_DIR="${OUT_DIR}/train"
 VAL_DIR="${OUT_DIR}/val"
 
-mkdir -p "${AUG_DIR}/audio" "${AUG_DIR}/metadata"
-mkdir -p "${TRAIN_DIR}/audio" "${VAL_DIR}/audio"
+mkdir -p "${RAW_DIR}" "${CLOTHO_DIR}" "${AUDIO_DIR}"
+mkdir -p "${TRAIN_DIR}/audio" "${VAL_DIR}/audio" configs
 
-# -----------------------------
-# Check raw dataset
-# -----------------------------
-if [ ! -d "$RAW_DIR" ]; then
-    echo "[ERROR] Raw DCASE dataset not found in data/raw/DCASE"
-    exit 1
+# ----------------------------------------------------
+# 1. Download Clotho v2 audio + captions
+# ----------------------------------------------------
+echo "[setup] Downloading Clotho v2…"
+
+AUDIO_ZIP="${CLOTHO_DIR}/clotho_audio_development.7z"
+CAPTIONS_URL="https://zenodo.org/records/4783391/files/clotho_captions_development.csv?download=1"
+
+# Audio (official mirror)
+if [ ! -f "$AUDIO_ZIP" ]; then
+    wget -O "$AUDIO_ZIP" \
+        "https://zenodo.org/records/4783391/files/clotho_audio_development.7z?download=1"
+else
+    echo "[setup] Audio archive already exists."
 fi
 
-echo "[setup] Found DCASE dataset:"
-echo " - dev:  $(ls ${DEV_AUDIO} | wc -l) files"
-echo " - eval: $(ls ${EVAL_AUDIO} | wc -l) files"
-
-# -----------------------------
-# Step 1: Build CSV with dev captions
-# -----------------------------
-DEV_CAPTIONS="${RAW_DIR}/dev/caption.csv"
-if [ ! -f "$DEV_CAPTIONS" ]; then
-    echo "[ERROR] Missing dev caption.csv at $DEV_CAPTIONS"
-    exit 1
+# Captions
+if [ ! -f "$CAPTIONS_CSV" ]; then
+    wget -O "$CAPTIONS_CSV" "$CAPTIONS_URL"
+else
+    echo "[setup] Captions CSV already exists."
 fi
 
-cp "$DEV_CAPTIONS" "${AUG_DIR}/metadata/metadata_dev.csv"
-echo "[setup] Copied dev captions to augmented directory."
+# ----------------------------------------------------
+# 2. Extract audio
+# ----------------------------------------------------
+echo "[setup] Extracting Clotho audio…"
 
-# -----------------------------
-# Step 2: Augment only dev/
-# -----------------------------
-echo "[setup] Running audio augmentation (medium level = 10 variants)…"
+7z x "$AUDIO_ZIP" -o"$AUDIO_DIR" 
 
-python3 build_dataset_auto.py \
-    --raw_dir "$DEV_AUDIO" \
-    --caption_csv "$DEV_CAPTIONS" \
-    --out_root "$AUG_DIR" \
-    --max_variants_per_file 10
+echo "[setup] Extract done."
+echo " - audio clips found: $(ls ${AUDIO_DIR}/*.wav | wc -l)"
 
-echo "[setup] Augmentation done."
-echo " - augmented audio: $(ls ${AUG_DIR}/audio | wc -l)"
-echo " - augmented metadata: $(wc -l ${AUG_DIR}/metadata/metadata_all.csv)"
+# ----------------------------------------------------
+# 3. Build TRAIN / VAL split
+# ----------------------------------------------------
+echo "[setup] Building train/val split…"
 
-# -----------------------------
-# Step 3: Create train/val split (from augmented only!)
-# -----------------------------
-echo "[setup] Creating train/val split (90% train / 10% val)…"
+TRAIN_META="${TRAIN_DIR}/metadata.csv"
+VAL_META="${VAL_DIR}/metadata.csv"
 
-python3 - << 'PY'
+echo "filepath,caption" > "$TRAIN_META"
+echo "filepath,caption" > "$VAL_META"
+
+total=$(ls ${AUDIO_DIR}/*.wav | wc -l)
+val_count=$(python3 - << PY
+import math
+print(int($total * 0.1))
+PY
+)
+
+python3 - << PY
 import csv, pathlib, random, shutil
 
-root = pathlib.Path("data/dataset/augmented")
-train_dir = pathlib.Path("data/dataset/train/audio")
-val_dir   = pathlib.Path("data/dataset/val/audio")
+audio_dir = pathlib.Path("${AUDIO_DIR}")
+captions_path = pathlib.Path("${CAPTIONS_CSV}")
+train_dir = pathlib.Path("${TRAIN_DIR}/audio")
+val_dir = pathlib.Path("${VAL_DIR}/audio")
 
-train_dir.mkdir(parents=True, exist_ok=True)
-val_dir.mkdir(parents=True, exist_ok=True)
-
-meta = root / "metadata/metadata_all.csv"
-rows = list(csv.DictReader(open(meta)))
-
+# Load captions
+rows = list(csv.DictReader(open(captions_path)))
 random.seed(42)
+
+# Random shuffle for split
 random.shuffle(rows)
 
-split = int(len(rows) * 0.9)
-train_rows = rows[:split]
-val_rows   = rows[split:]
+val_n = $val_count
+val_rows = rows[:val_n]
+train_rows = rows[val_n:]
 
-# Save metadata
-with open("data/dataset/train/metadata.csv", "w") as f:
-    w = csv.DictWriter(f, fieldnames=rows[0].keys())
-    w.writeheader()
-    w.writerows(train_rows)
+def copy_and_write(rows, out_dir, out_meta):
+    with open(out_meta, "a") as meta:
+        writer = csv.writer(meta)
+        for r in rows:
+            # Clotho CSV uses file 'xxx.wav' and 5 captions spread over columns
+            # Choose caption_1 (or merge if needed)
+            fname = r["file_name"]
+            caption = r["caption_1"]
+            src = audio_dir / fname
+            dst = out_dir / fname
+            shutil.copy(src, dst)
+            writer.writerow([str(dst), caption])
 
-with open("data/dataset/val/metadata.csv", "w") as f:
-    w = csv.DictWriter(f, fieldnames=rows[0].keys())
-    w.writeheader()
-    w.writerows(val_rows)
+copy_and_write(train_rows, train_dir, "${TRAIN_META}")
+copy_and_write(val_rows, val_dir, "${VAL_META}")
 
-# copy audio files
-def copy_rows(rows, out_dir):
-    for r in rows:
-        src = pathlib.Path(r["filepath"])
-        dst = out_dir / src.name
-        shutil.copy(src, dst)
-
-copy_rows(train_rows, train_dir)
-copy_rows(val_rows, val_dir)
-
-print(f"[python] Train files: {len(train_rows)}")
-print(f"[python] Val files:   {len(val_rows)}")
+print("[python] Train:", len(train_rows))
+print("[python] Val:", len(val_rows))
 PY
 
-echo "[setup] Train/val split completed."
-echo " - train: $(ls ${TRAIN_DIR}/audio | wc -l)"
-echo " - val:   $(ls ${VAL_DIR}/audio | wc -l)"
+echo " - train audio: $(ls ${TRAIN_DIR}/audio | wc -l)"
+echo " - val audio:   $(ls ${VAL_DIR}/audio | wc -l)"
 
-# -----------------------------
-# Step 4: Write dataset config JSONs
-# -----------------------------
-echo "[setup] Writing dataset config files…"
+# ----------------------------------------------------
+# 4. Create dataset configs (Stable Audio format)
+# ----------------------------------------------------
+echo "[setup] Writing dataset configs…"
+
+TRAIN_ABS="$(realpath "$TRAIN_DIR/audio")"
+VAL_ABS="$(realpath "$VAL_DIR/audio")"
+METADATA_ADAPTER="$(realpath "configs/metadata_adapter.py")"
 
 cat > configs/dataset_config.train.abs.json << EOF
 {
-  "audio_dir": "${TRAIN_DIR}/audio",
-  "metadata_path": "${TRAIN_DIR}/metadata.csv",
-  "sample_rate": 44100,
-  "duration": 4.0
+  "dataset_type": "audio_dir",
+  "random_crop": true,
+  "datasets": [
+    {
+      "id": "train_ds",
+      "path": "$TRAIN_ABS",
+      "recursive": false,
+      "extensions": [".wav"],
+      "custom_metadata_module": "$METADATA_ADAPTER"
+    }
+  ]
 }
 EOF
 
 cat > configs/dataset_config.val.abs.json << EOF
 {
-  "audio_dir": "${VAL_DIR}/audio",
-  "metadata_path": "${VAL_DIR}/metadata.csv",
-  "sample_rate": 44100,
-  "duration": 4.0
+  "dataset_type": "audio_dir",
+  "random_crop": false,
+  "datasets": [
+    {
+      "id": "val_ds",
+      "path": "$VAL_ABS",
+      "recursive": false,
+      "extensions": [".wav"],
+      "custom_metadata_module": "$METADATA_ADAPTER"
+    }
+  ]
 }
 EOF
 
-echo "[setup] Done."
+echo "[setup] DONE ✓"
 

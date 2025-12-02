@@ -2,5 +2,7 @@
 data/*
 overrides/*
 checkpoints/*
+wandb/*
+configs/*
 
 *.pyc
