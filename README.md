@@ -38,18 +38,24 @@ pip install --upgrade pip setuptools wheel
 
 Clone the Stable Audio Tools repository **next to** this fine-tuning repo (recommended layout):
 
+```
 cd ..  
 git clone https://github.com/Stability-AI/stable-audio-tools.git  
+```
 
 Expected directory structure:
 
+```
 Documents/  
 ├── stableaudioopen_finetune/  
 └── stable-audio-tools/  
+```
 
 Install stable-audio-tools in editable mode:
 
+```
 pip install -e ../stable-audio-tools  
+```
 
 Important notes:
 
@@ -64,17 +70,21 @@ Fine-tuning and inference require the **base model weights and configuration**, 
 
 Download Stable Audio Open 1.0 from Hugging Face:
 
+```
 huggingface-cli download stabilityai/stable-audio-open-1.0 \
   --local-dir ../stableaudio/models/stabilityai__stable-audio-open-1.0 \
   --local-dir-use-symlinks False  
+```
 
 After download, you should have:
 
+```
 stableaudio/models/stabilityai__stable-audio-open-1.0/  
 ├── model.safetensors  
 ├── model_config.json  
 ├── README.md  
 └── ...  
+```
 
 The path to `model_config.json` is required when testing fine-tuned checkpoints.
 
@@ -84,14 +94,18 @@ The path to `model_config.json` is required when testing fine-tuned checkpoints.
 
 From the fine-tuning repository root:
 
+```
 pip install -r requirements.txt  
+```
 
 If you encounter build errors:
 
 - Ensure Python version is **3.10**
 - If necessary, pin setuptools:
 
+```
 pip install "setuptools<81"  
+```
 
 ---
 
@@ -99,7 +113,9 @@ pip install "setuptools<81"
 
 Run the setup script:
 
+```
 bash setup.sh  
+```
 
 This will:
 
@@ -109,10 +125,12 @@ This will:
 
 Resulting structure:
 
+```
 data/  
 └── processed/  
     ├── train/  
     └── val/  
+```
 
 ---
 
@@ -122,6 +140,7 @@ Training is launched using PyTorch Lightning configuration files.
 
 Example:
 
+```
 python3 ../stable-audio-tools/train.py \
   --config-file ../stable-audio-tools/defaults.ini \
   --dataset-config ./configs/dataset_config.train.abs.json \
@@ -137,13 +156,16 @@ python3 ../stable-audio-tools/train.py \
   --checkpoint-every 500 \
   --val-every 500 \
   --logger wandb
+```
 
 Checkpoints are written to:
 
+```
 checkpoints/  
 └── <experiment_name>/  
     └── checkpoints/  
         ├── epoch=*.ckpt  
+```
 
 ---
 
@@ -153,10 +175,12 @@ Use `test_checkpoint.py` to run inference with a fine-tuned model.
 
 Example:
 
+```
 python test_checkpoint.py \
   --ckpt checkpoints/dcase_finetune_v2/.../epoch=4-step=1000.ckpt \
   --config ../stableaudio/models/stabilityai__stable-audio-open-1.0/model_config.json \
   --prompt "a forest ambience with birds and wind"  
+```
 
 The script will:
 
