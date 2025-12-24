@@ -21,12 +21,16 @@ The setup assumes **Python 3.10** and a **local clone** of the `stable-audio-too
 
 Create and activate a Python 3.10 virtual environment:
 
+```
 python3.10 -m venv .venv  
 source .venv/bin/activate  
+```
 
 Upgrade pip and build tools:
 
+```
 pip install --upgrade pip setuptools wheel  
+```
 
 ---
 
