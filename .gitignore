@@ -6,3 +6,5 @@ wandb/*
 configs/*
 
 *.pyc
+.DS_Store
+demo_*.wav

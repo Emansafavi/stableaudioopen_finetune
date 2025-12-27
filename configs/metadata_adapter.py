@@ -1,6 +1,7 @@
 import os, csv
 from pathlib import Path
 from typing import Dict
+import functools
 
 _CACHE = {}  # cache per-CSV-path: {stem: {"prompt": str}}
 
@@ -35,6 +36,7 @@ def get_path(sample_path, *_, **__):       return str(sample_path)
 def resolve_path(sample_path, *_, **__):    return str(sample_path)
 
 # METADATA-style (must return a dict)
+# Make this function pickleable by using a module-level function
 def get_custom_metadata(info, audio=None):
     path = (isinstance(info, dict) and (info.get("path") or info.get("relpath") or info.get("filepath"))) or audio or info
     csv_path = _default_csv_for(path)
@@ -45,3 +47,7 @@ def get_metadata(*args, **kwargs):
     except TypeError: 
         target = args[0] if args else ""
         return _meta_for(target, _default_csv_for(target))
+
+# Make the function pickleable by ensuring it's at module level
+# and can be imported properly
+__all__ = ['get_custom_metadata', 'get_metadata', 'get_audio_path', 'get_path', 'resolve_path']
