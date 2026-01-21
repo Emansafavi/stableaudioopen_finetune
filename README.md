@@ -54,7 +54,8 @@ Documents/
 Install stable-audio-tools in editable mode:
 
 ```
-pip install -e ../stable-audio-tools  
+cd (project folder where the 2 folders are)
+pip install -e stable-audio-tools/ 
 ```
 
 Important notes:
